@@ -1,0 +1,18 @@
+{
+    "versionLabel": "1.0",
+    "uuid": "484ec19b-d836-4270-8299-fda33bff5f36",
+    "appKeys": {},
+    "longName": "Binary Blob",
+    "versionCode": 1,
+    "capabilities": [
+        ""
+    ],
+    "shortName": "Binary Blob",
+    "companyName": "jmlait",
+    "watchapp": {
+        "watchface": true
+    },
+    "resources": {
+        "media": []
+    }
+}

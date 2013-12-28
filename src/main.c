@@ -1,21 +1,10 @@
-#include "pebble_os.h"
-#include "pebble_app.h"
-#include "pebble_fonts.h"
-
-
-#define MY_UUID { 0x8E, 0xFD, 0x77, 0xD9, 0x8C, 0xCB, 0x4B, 0x16, 0xA4, 0xAB, 0x6D, 0x84, 0xA2, 0xAD, 0xEA, 0xCE }
-PBL_APP_INFO(MY_UUID,
-             "BinaryBlob", "Jeff Lait",
-             1, 0, /* App version */
-             DEFAULT_MENU_ICON,
- //            APP_INFO_STANDARD_APP);
-             APP_INFO_WATCH_FACE);
+#include <pebble.h>
 
 #include "mytypes.h"
 #include "rand.h"
 
-Window glbWindow;
-Layer glbBlobLayer;
+Window *glbWindowP;
+Layer *glbBlobLayerP;
 
 bool glbLive  = false;
 
@@ -26,6 +15,8 @@ typedef struct
 {
 	int	x, y;
 } PT2;
+
+void handle_timer(void *data);
 
 #define FIXBITS 10
 
@@ -203,7 +194,7 @@ void bloblayer_update(Layer *me, GContext *ctx)
 		graphics_context_set_stroke_color(ctx, GColorWhite);
 	}
 	
-	graphics_fill_rect(ctx, me->frame, 0, 0);
+	graphics_fill_rect(ctx, layer_get_frame(me), 0, 0);
 	
 	for (int y = 0; y < HEIGHT; y++)
 	{
@@ -277,19 +268,17 @@ void bloblayer_update(Layer *me, GContext *ctx)
 	}
 }
 
-void handle_init(AppContextRef ctx) 
+void handle_init() 
 {
-	(void)ctx;
+	glbWindowP = window_create();
 	
-	window_init(&glbWindow, "Main");
-	window_stack_push(&glbWindow, true /* Animated */);
-	window_set_background_color(&glbWindow, GColorWhite);
+	window_stack_push(glbWindowP, true /* Animated */);
+	window_set_background_color(glbWindowP, GColorWhite);
 	
-	resource_init_current_app(&APP_RESOURCES);
-
-	layer_init(&glbBlobLayer, glbWindow.layer.frame);
-	glbBlobLayer.update_proc = &bloblayer_update;
-	layer_add_child(&glbWindow.layer, &glbBlobLayer);
+	glbBlobLayerP = layer_create(
+		layer_get_frame(window_get_root_layer(glbWindowP)));
+	layer_set_update_proc(glbBlobLayerP, &bloblayer_update);
+	layer_add_child(window_get_root_layer(glbWindowP), glbBlobLayerP);
 	
 	rand_seed();
 	for (int part = 0; part < NUM_PART; part++)
@@ -301,9 +290,17 @@ void handle_init(AppContextRef ctx)
 	}
 	
 	glbLive = true;
-	app_timer_send_event(ctx, REFRESH_RATE, INTEGRATE_TIMER_ID);
+	app_timer_register(REFRESH_RATE, handle_timer, 0);
 	
-	layer_mark_dirty(&glbBlobLayer);
+	layer_mark_dirty(glbBlobLayerP);
+}
+
+void handle_deinit() 
+{
+	window_destroy(glbWindowP);
+	glbWindowP = 0;
+	layer_destroy(glbBlobLayerP);
+	glbBlobLayerP = 0;
 }
 
 void
@@ -386,32 +383,29 @@ part_integrate()
 }
 
 void
-handle_tick(AppContextRef ctx, PebbleTickEvent *event)
+handle_tick(struct tm *tick_time, TimeUnits units_chnnged)
 {
 	// Set our targets.
-	PblTm	time;
-	
-	get_time(&time);
-	
-	if (time.tm_min == glbTargetMinute)
+	if (tick_time->tm_min == glbTargetMinute)
 		return;
 	
-	glbTargetMinute = time.tm_min;
+	glbTargetMinute = tick_time->tm_min;
 	
 	int 	ntarget = 0;
 	static int		targets[NUM_CLOCKBITS];
+	int hour = tick_time->tm_hour;
 	
-	if (time.tm_hour > 12)
-		time.tm_hour -= 12;
+	if (hour > 12)
+		hour -= 12;
 	
 	for (int bit = 0; bit < 4; bit++)
 	{
-		if (time.tm_hour & (1 << (3-bit)))
+		if (hour & (1 << (3-bit)))
 			targets[ntarget++] = bit;
 	}
 	for (int bit = 0; bit < 6; bit++)
 	{
-		if (time.tm_min & (1 << (5-bit)))
+		if (tick_time->tm_min & (1 << (5-bit)))
 			targets[ntarget++] = bit + 4;
 	}
 	
@@ -455,38 +449,28 @@ handle_tick(AppContextRef ctx, PebbleTickEvent *event)
 	if (!glbLive)
 	{
 		glbLive = true;
-		app_timer_send_event(ctx, REFRESH_RATE, INTEGRATE_TIMER_ID);
+		app_timer_register(REFRESH_RATE, handle_timer, 0);
 	}
 	
-	layer_mark_dirty(&glbBlobLayer);
+	layer_mark_dirty(glbBlobLayerP);
 }
 
 void
-handle_timer(AppContextRef ctx, AppTimerHandle handle, uint32_t cookie)
+handle_timer(void *data)
 {
-	if (cookie == INTEGRATE_TIMER_ID)
-	{
-		glbLive = part_integrate();
+	glbLive = part_integrate();
 		
-		if (glbLive)
-			app_timer_send_event(ctx, REFRESH_RATE, INTEGRATE_TIMER_ID);
-		layer_mark_dirty(&glbBlobLayer);
-	}
+	if (glbLive)
+		app_timer_register(REFRESH_RATE, handle_timer, 0);
+	layer_mark_dirty(glbBlobLayerP);
 }
 
 
-void pbl_main(void *params) 
+int 
+main() 
 {
-	PebbleAppHandlers handlers = 
-	{
-		.init_handler = &handle_init,
-		.tick_info =
-		{
-			.tick_handler = &handle_tick,
-			.tick_units = SECOND_UNIT
-		},
-		.timer_handler = &handle_timer
-	};
-	
-	app_event_loop(params, &handlers);
+	handle_init();
+	tick_timer_service_subscribe(SECOND_UNIT, handle_tick);
+	app_event_loop();
+	handle_deinit();
 }
